@@ -102,6 +102,7 @@ void deal_request(void *client_sock){
 	char url[255];
 	char protocol[50];
 	bool cgi=false;
+	char *query_string=NULL;
 
 	charnum=get_line(cli_sock,buf,sizeof(buf));
 	if(charnum==0){
@@ -118,6 +119,24 @@ void deal_request(void *client_sock){
 		uncompleted(cli_sock,method);	
 	}
 
+	if(strcasecmp(method,"POST")==0){
+		
+	
+	}
+
+	if(strcasecmp(method,"GET")==0){
+		query_string=strchr(url,'?');
+		if(query_string){
+			cgi=true;
+			*query_string='\0';
+			query_string++;
+		}
+
+		charnum=get_line(cli_sock,buf,sizeof(buf));
+		while(charnum){
+			charnum=get_line(cli_sock,buf,sizeof(buf));
+		}
+	}
 
 	close(cli_sock);
 
@@ -177,6 +196,7 @@ int get_line(int sock, char *buf, int size)
 
 //uncompleted();
 void uncompleted(int client_sock,char *method){
+	
 	char buf[1024];
 
 	sprintf(buf,"HTTP/1.0 501 METHOD NOT COMPLETED\r\n");
@@ -185,7 +205,6 @@ void uncompleted(int client_sock,char *method){
 	sprintf(buf,"Content-Type:text/html\r\n");
 	send(client_sock,buf,strlen(buf),0);
 	
-
 	sprintf(buf,"\r\n");
 	send(client_sock,buf,strlen(buf),0);
 
