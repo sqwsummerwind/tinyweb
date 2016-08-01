@@ -12,6 +12,8 @@
 int start_up(int port);
 void error_die(const char *msg);
 void deal_request(void *server_sock);
+int get_line(int,char *,int);
+void uncompleted(int,char *);
 
 int main(int argc,char **argv)
 {
@@ -93,4 +95,104 @@ void error_die(const char *msg)
 //deal_request
 void deal_request(void *client_sock){
 	
+	int cli_sock =*(int*)client_sock;
+	int charnum=0;
+	char buf[1024];
+	char method[10];
+	char url[255];
+	char protocol[50];
+	bool cgi=false;
+
+	charnum=get_line(cli_sock,buf,sizeof(buf));
+	if(charnum==0){
+		error_die("get_line error\n");
+	}
+
+	if(EOF==sscanf(buf,"%[^ ] %[^ ] %[^ ]",method,url,protocol)){
+		error_die("sscanf error");
+	}
+
+	//method is not get and post
+	if((strcasecmp(method,"GET")!=0)&&(strcasecmp(method,"POST")!=0)){
+		
+		uncompleted(cli_sock,method);	
+	}
+
+
+	close(cli_sock);
+
+}
+
+//get a line
+/*int get_line(int client_sock,char *buf){
+
+	int i=0;
+	int n=1;
+	char c='\0';
+	while(n>0&&c!='\n'){
+		
+		n=recv(client_sock,&c,1,MSG_DONTWAIT);
+		if(c=='\r'){
+			n=recv(client_sock,&c,1,MSG_PEEK);
+			if(n&&c=='\n'){
+				n=recv(client_sock,&c,1,0);
+			}else{
+				c='\n';
+			}
+
+		}
+		buf[i++]=c;
+	}
+	return i;
+}*/
+
+int get_line(int sock, char *buf, int size)
+{
+	int i = 0;
+	char c = '\0';
+	int n;
+	
+	while ((i < size - 1) && (c != '\n')){
+		n = recv(sock, &c, 1, 0);
+		/* DEBUG printf("%02X\n", c); */
+		if (n > 0){
+			if (c == '\r'){
+				n = recv(sock, &c, 1, MSG_PEEK);
+				/* DEBUG printf("%02X\n", c); */
+				if ((n > 0) && (c == '\n'))
+					recv(sock, &c, 1, 0);
+				else
+					c = '\n';
+			}
+			
+			buf[i] = c;
+			i++;
+		} else
+			c = '\n';
+	}
+	buf[i] = '\0';
+	
+	return(i);
+ }
+
+//uncompleted();
+void uncompleted(int client_sock,char *method){
+	char buf[1024];
+
+	sprintf(buf,"HTTP/1.0 501 METHOD NOT COMPLETED\r\n");
+	send(client_sock,buf,strlen(buf),0);
+	
+	sprintf(buf,"Content-Type:text/html\r\n");
+	send(client_sock,buf,strlen(buf),0);
+	
+
+	sprintf(buf,"\r\n");
+	send(client_sock,buf,strlen(buf),0);
+
+	sprintf(buf,"<html><title>METHOD NOT COMPLETED</title>\r\n");
+	send(client_sock,buf,strlen(buf),0);
+
+	sprintf(buf,"<body><p>This method :%s is not completed</p></body></html>\r\n",method);
+	send(client_sock,buf,strlen(buf),0);
+
 }
