@@ -10,6 +10,8 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <stdbool.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #define SERVER_STRING "Server: summerwind/0.1.0\r\n"
 
@@ -20,9 +22,9 @@ int get_line(int,char *,int);
 void uncompleted(int,char *);
 void not_found(int,char *);
 void deal_cgi(int,char *,char *,char *);
-void deal_static(int,char *);
+void deal_static(int,char *,int);
 void send_head(int,char *);
-void send_content(int,FILE *);
+int  get_content(char *,int,int);
 void get_mime(char *content_type,char *path);
 void cgi_error(int);
 void invalid_req(int);
@@ -145,7 +147,7 @@ void deal_request(void *client_sock){
 			*query_string='\0';
 			query_string++;
 		}
-		printf("url:%s\n query_stirng:%s\n",url,query_string);
+		//printf("url:%s\n query_stirng:%s\n",url,query_string);
 
 		charnum=get_line(cli_sock,buf,sizeof(buf));
 		while((charnum>0)&&strcmp("\n",buf)){
@@ -173,7 +175,7 @@ void deal_request(void *client_sock){
 		if(cgi){
 			deal_cgi(cli_sock,path,method,query_string);
 		}else{
-			deal_static(cli_sock,path);
+			deal_static(cli_sock,path,(int)st.st_size);
 		}
 	
 	}
@@ -281,20 +283,28 @@ void uncompleted(int client_sock,char *method){
 
 }
 
-void deal_static(int client_sock,char *path){
+void deal_static(int client_sock,char *path,int file_size){
 	
 	//send_head(client_sock,path);
 
-	FILE *file=fopen(path,"r");
-	if(file==NULL){
+	//FILE *file=fopen(path,"r");
+	char *buf;
+	char file[file_size];
+
+	buf = (char *)malloc(file_size);
+	int fd = open(path,O_RDONLY);
+	if(fd==-1){
 		not_found(client_sock,path);
 	}else{
 	
 		send_head(client_sock,path);
-		send_content(client_sock,file);
+		get_content(buf,fd,file_size);
+		//sprintf(file,"%s",buf);
+		send(client_sock,buf,file_size,0);
 	}
 
-	fclose(file);
+	free(buf);
+	close(fd);
 
 }
 
@@ -302,21 +312,23 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 	int charnum=-1;
 	char buf[1024];
 	int content_len=-1;
-	char *con_len;
+	char con_len[10];
 	int cgi_output[2];
 	int cgi_input[2];
 	pid_t pid;
-	char *content;
+	char content[255];
 	char c;
 	int status;
 
+	buf[0]='a';
+	buf[1]='\0';
 	if(strcasecmp(method,"POST")==0){
 		charnum=get_line(client_sock,buf,sizeof(buf));
 		while(charnum>0 && strcmp(buf,"\n")){
 			buf[15]='\0';
 			if(strcmp(buf,"Content-Length:")==0){
 				content_len=atoi(&buf[16]);
-				con_len=&buf[16];
+			//	con_len=&buf[16];
 			}
 
 			charnum=get_line(client_sock,buf,sizeof(buf));
@@ -326,6 +338,7 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 			invalid_req(client_sock);
 			return;
 		}
+		sprintf(con_len,"%d",content_len);
 
 	}
 
@@ -339,7 +352,7 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 		return;
 	}
 
-	if(pid=fork()==-1){
+	if((pid=fork())==-1){
 		cgi_error(client_sock);
 		return;
 	}
@@ -350,8 +363,10 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 	//child process
 	if(pid==0){
 		
+		printf("this a deal_cgi,child process\n");
+		printf("content-length:%s\n",con_len);
 		dup2(cgi_input[0],0);
-		dup2(cgi_output[1],1);
+		dup2(client_sock,1);
 		close(cgi_input[1]);
 		close(cgi_output[0]);
 
@@ -363,7 +378,9 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 		
 		execl(path,path,NULL);
 		exit(0);
-	}else{
+	}
+	else
+	{
 		
 		close(cgi_input[0]);
 		close(cgi_output[1]);
@@ -375,8 +392,10 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 			
 		}
 
-		while(read(cgi_output[0],&c,1)>0)
-			send(client_sock,&c,1,0);
+		printf("this is parent process\n");
+		printf("content:%s\n",content);
+		//while(read(cgi_output[0],&c,1)>0)
+			//send(client_sock,&c,1,0);
 
 		close(cgi_output[0]);
 		close(cgi_input[1]);
@@ -413,13 +432,31 @@ void invalid_req(int client_sock){
 	send(client_sock,buf,strlen(buf),0);
 }
 
-void send_content(int client_sock,FILE *file){
-	char buf[1024];
-	fgets(buf,sizeof(buf),file);
-	while(!feof(file)){
+int get_content(char *usrbuf,int fd,int file_size){
+	/*char buf[1024];
+	//fgets(buf,sizeof(buf),file);
+	while(read(fd,buf,sizeof(buf))){
+		//fgets(buf,sizeof(buf),file);
 		send(client_sock,buf,strlen(buf),0);
-		fgets(buf,sizeof(buf),file);
+	}*/
+
+	int nleft = file_size;
+	int nread;
+	char *bufp=usrbuf;
+	while (nleft > 0) {
+		if ((nread = read(fd, bufp, nleft)) < 0) {
+			if (errno == EINTR) /* interrupted by sig handler return */
+				nread = 0;      /* and call read() again */
+			else
+				return -1;      /* errno set by read() */ 
+		}else if (nread == 0)
+			break;              /* EOF */
+	nleft -= nread;
+	bufp += nread;
+	
 	}
+	
+	return(file_size-nleft);
 
 }
 
