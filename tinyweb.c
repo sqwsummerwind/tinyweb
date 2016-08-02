@@ -128,22 +128,28 @@ void error_die(const char *msg)
 */
 void deal_request(void *client_sock){
 	
+	//客户端sock号
 	int cli_sock =*(int*)client_sock;
 	int charnum=0;
 	char buf[1024];
+	//请求方法
 	char method[10];
 	char url[255];
 	char protocol[50];
 	bool cgi=false;
+	//cgi程序的参数
 	char *query_string=NULL;
 	char *path=NULL;
+	//文件的各种信息，具体可以查看stat函数
 	struct stat st;
-
+	
+	//读取一行
 	charnum=get_line(cli_sock,buf,sizeof(buf));
 	if(charnum==0){
 		error_die("get_line error\n");
 	}
-
+	
+	//进行分离
 	if(EOF==sscanf(buf,"%[^ ] %[^ ] %[^ ]",method,url,protocol)){
 		error_die("sscanf error");
 	}
@@ -154,20 +160,21 @@ void deal_request(void *client_sock){
 		uncompleted(cli_sock,method);
 		return;
 	}
-
+	
 	if(strcasecmp(method,"POST")==0){	
 		cgi=true;
 	}
 
 	if(strcasecmp(method,"GET")==0){
+		//找出？字符的位置
 		query_string=strchr(url,'?');
 		if(query_string){
 			cgi=true;
 			*query_string='\0';
 			query_string++;
 		}
-		//printf("url:%s\n query_stirng:%s\n",url,query_string);
 
+		//如果是get方法，后面的内容没有用，就丢弃
 		charnum=get_line(cli_sock,buf,sizeof(buf));
 		while((charnum>0)&&strcmp("\n",buf)){
 			//printf("%s",buf);
@@ -175,22 +182,21 @@ void deal_request(void *client_sock){
 
 		}
 	}
-
+	//url的形式为：/aisi.jpg，而path是存取路径，把第一个/去掉，变为aisi.jpg
 	path=url+1;
+	//判断文件是否存在
 	if(stat(path,&st)==-1){
-		
-		//printf("path:%s\n",path);
 		not_found(cli_sock,path);
-	}
-	else{
+	}else{
+		//如果访问的是目录，默认为访问主页
 		if((st.st_mode&S_IFMT)==S_IFDIR){
 			sprintf(path,"index.html");
 		}
-
+		//查看是否有执行权限，如果有，就是cgi
 		if((st.st_mode&S_IXOTH)||(st.st_mode&S_IXUSR)||(st.st_mode&S_IXGRP)){
 			cgi=true;
 		}
-
+		//分别调用对应的处理函数
 		if(cgi){
 			deal_cgi(cli_sock,path,method,query_string);
 		}else{
@@ -203,6 +209,7 @@ void deal_request(void *client_sock){
 
 }
 
+//文件不存在时调用，向客户端发送文件不存在的信息
 void not_found(int client_sock,char *path){
 	
 	char buf[1024];
@@ -251,6 +258,7 @@ void not_found(int client_sock,char *path){
 	return i;
 }*/
 
+//从sock读取内容，一次设置成读取一行
 int get_line(int sock, char *buf, int size)
 {
 	int i = 0;
@@ -280,7 +288,7 @@ int get_line(int sock, char *buf, int size)
 	return(i);
  }
 
-//uncompleted();
+//如果请求的方法不是get也不是post，返回错误信息
 void uncompleted(int client_sock,char *method){
 	
 	char buf[1024];
@@ -302,6 +310,9 @@ void uncompleted(int client_sock,char *method){
 
 }
 
+/*
+处理静态内容
+*/
 void deal_static(int client_sock,char *path,int file_size){
 	
 	//send_head(client_sock,path);
@@ -309,45 +320,58 @@ void deal_static(int client_sock,char *path,int file_size){
 	//FILE *file=fopen(path,"r");
 	char *buf;
 	char file[file_size];
-
+	//对buf进行内存分配
 	buf = (char *)malloc(file_size);
+	//打开文件
 	int fd = open(path,O_RDONLY);
 	if(fd==-1){
 		not_found(client_sock,path);
 	}else{
-	
+		//发送头部
 		send_head(client_sock,path);
+		//获取内容
 		get_content(buf,fd,file_size);
-		//sprintf(file,"%s",buf);
+		//给客户端发送文件内容
 		send(client_sock,buf,file_size,0);
 	}
-
+	
+	//释放内容，这很重要
 	free(buf);
 	close(fd);
+	return;
 
 }
 
+/*
+处理cgi的内容
+*/
 void deal_cgi(int client_sock,char *path,char *method,char *query_string){
+	
 	int charnum=-1;
 	char buf[1024];
+	//请求的cgi的参数长度
 	int content_len=-1;
+	//也是参数长度
 	char con_len[10];
 	int cgi_output[2];
 	int cgi_input[2];
+	//进程号
 	pid_t pid;
+	//参数的内容
 	char content[255];
 	char c;
 	int status;
 
 	buf[0]='a';
 	buf[1]='\0';
+	//方法如果为post，不断读取剩下的内容并丢弃
 	if(strcasecmp(method,"POST")==0){
 		charnum=get_line(client_sock,buf,sizeof(buf));
 		while(charnum>0 && strcmp(buf,"\n")){
+			//找到content-length,获取参数内容的长度
 			buf[15]='\0';
 			if(strcmp(buf,"Content-Length:")==0){
 				content_len=atoi(&buf[16]);
-			//	con_len=&buf[16];
 			}
 
 			charnum=get_line(client_sock,buf,sizeof(buf));
@@ -357,20 +381,21 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 			invalid_req(client_sock);
 			return;
 		}
-		sprintf(con_len,"%d",content_len);
+		
 
 	}
-
+	
+	//创建管道
 	if(pipe(cgi_output)==-1){
 		cgi_error(client_sock);
 		return;
 	}
-
+	//创建管道
 	if(pipe(cgi_input)==-1){
 		cgi_error(client_sock);
 		return;
 	}
-
+	//fork一个新的进程处理cgi
 	if((pid=fork())==-1){
 		cgi_error(client_sock);
 		return;
@@ -379,22 +404,25 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 	sprintf(buf,"HTTP/1.0 200 OK\r\n");
 	send(client_sock,buf,strlen(buf),0);
 
-	//child process
+	//子进程
 	if(pid==0){
 		
-		printf("this a deal_cgi,child process\n");
-		printf("content-length:%s\n",con_len);
+		//把cgi_input的输出端重定向为stdin
 		dup2(cgi_input[0],0);
+		//把客户sock重定向为stdout
 		dup2(client_sock,1);
+		//分别关闭不使用的两个管道端口
 		close(cgi_input[1]);
 		close(cgi_output[0]);
-
+		
+		//设置环境变量，在cgi程序中可以获取
 		setenv("REQUEST_METHOD",method,1);
 		if(strcasecmp(method,"GET")==0)
 			setenv("QUERY_STRING",query_string,1);
 		else
 			setenv("CONTENT_LENGTH",con_len,1);
 		
+		//使用exec系列函数调用cgi程序
 		execl(path,path,NULL);
 		exit(0);
 	}
@@ -405,14 +433,11 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 		close(cgi_output[1]);
 		
 		if(strcasecmp(method,"POST")==0){
-			
+			//读取参数的内容，输出到管道中，cgi程序可以在管道中获取
 			recv(client_sock,content,content_len,0);
 			write(cgi_input[1],content,content_len);
 			
 		}
-
-		printf("this is parent process\n");
-		printf("content:%s\n",content);
 		//while(read(cgi_output[0],&c,1)>0)
 			//send(client_sock,&c,1,0);
 
@@ -425,6 +450,7 @@ void deal_cgi(int client_sock,char *path,char *method,char *query_string){
 
 }
 
+//管道或者fork不成功
 void cgi_error(int client_sock){
 	
 	char buf[1024];
@@ -439,6 +465,7 @@ void cgi_error(int client_sock){
 
 }
 
+//post方法没有content-length
 void invalid_req(int client_sock){
 
 	char buf[1024];
@@ -451,6 +478,7 @@ void invalid_req(int client_sock){
 	send(client_sock,buf,strlen(buf),0);
 }
 
+//获取文件的内容
 int get_content(char *usrbuf,int fd,int file_size){
 	/*char buf[1024];
 	//fgets(buf,sizeof(buf),file);
@@ -479,6 +507,7 @@ int get_content(char *usrbuf,int fd,int file_size){
 
 }
 
+//发送头部
 void send_head(int client_sock,char *path){
 	
 	char content_type[30];
@@ -497,6 +526,7 @@ void send_head(int client_sock,char *path){
 	send(client_sock,buf,strlen(buf),0);
 }
 
+//获取mime类型
 void get_mime(char *content_type,char *path){
 	char *index=strchr(path,'.');
 	
