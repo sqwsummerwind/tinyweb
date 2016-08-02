@@ -1,3 +1,11 @@
+/*
+这个小小的服务器主要的功能是用来练习在linux下的编程和熟悉与网络编程相关的知识。
+这个服务器支持get和post两种请求方式。
+支持cgi
+支持图片、文档等等的静态内容。
+完成于2016.8.2
+*/
+
 #include <arpa/inet.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -31,6 +39,7 @@ void invalid_req(int);
 
 int main(int argc,char **argv)
 {
+	//服务器socket号
 	int server_sock;
 	int client_sock;
 	//端口号
@@ -46,19 +55,21 @@ int main(int argc,char **argv)
 	//把字符串类型端口号转为整型
 	port = atoi(argv[1]);
 	
+	//初始化服务器socket号
 	server_sock=start_up(port);
 	client_addr_len=sizeof(client_addr);
-
+	
+	//不断循环，不断接收客户端的链接请求
 	while(1){
-
+		//accept函数返回值，初始化客户socket号，以后获取客户端的内容和向客户端发送信息都
+		//通过这个端口号
 		client_sock = accept(server_sock,(struct sockaddr *)&client_addr,&client_addr_len);
 
 		if(client_sock == -1){
-			
 			error_die("accept error\n");
 		}
 		
-		
+		//创建新的线程来为客户端服务，主要pthread_create这个函数的参数
 		if(pthread_create(&thread_id,NULL,(void *)deal_request,(void *)&client_sock)!=0)
 			error_die("pthread_create error\n");
 	}
@@ -66,31 +77,34 @@ int main(int argc,char **argv)
 	close(server_sock);
 	return 0;
 }
-
-//start_up function
-//socket
-//bind
-//listen
+/*
+这个函数主要是初始化服务器端的socket，以准备链接客户端
+*/
 
 int start_up(int port){
 	
 	int sock_id;
 	struct sockaddr_in name;
 	
-	//socket
+	//AF_INET表示ipv4,SOCK_STREAM表示有链接传输流，具体查看socket函数手册
 	if((sock_id=socket(AF_INET,SOCK_STREAM,0))==-1){
 		error_die("socket error\n");
 	}
 	
 	memset(&name,0,sizeof(name));
+	//这是必须要设置的值
 	name.sin_family=AF_INET;
+	//使用这个函数把port转换为网络端存储形式
 	name.sin_port=htons(port);
+	//这个自动获取主机ip
 	name.sin_addr.s_addr=htonl(INADDR_ANY);
-
+	
+	//把sock_id和sockaddr进行绑定
 	if(bind(sock_id,(struct sockaddr *)&name,sizeof(name))==-1){
 		error_die("bind error\n");
 	}
-
+	
+	//启动监听
 	if(listen(sock_id,10)==-1){
 		error_die("listen error\n");
 	}
@@ -99,14 +113,19 @@ int start_up(int port){
 
 }
 
-//error_die
+//出错时在终端打印错误信息
 void error_die(const char *msg)
 {
 	perror(msg);
 	exit(EXIT_FAILURE);
 }
 
-//deal_request
+/*
+处理客户端发送过来的请求，主要是判断请求是get还是post方法
+把 请求方法 url protocol 进行分离
+并判断是请求静态内容还是cgi
+分别调用deal_static和deal_cgi进行处理
+*/
 void deal_request(void *client_sock){
 	
 	int cli_sock =*(int*)client_sock;
